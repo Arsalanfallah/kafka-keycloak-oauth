@@ -16,5 +16,6 @@ copy broker secret to ./kafka-config/admin-jaas.conf
 docker exec -it kafka-broker sh
 8-
 /tmp/bootstrap-acls.sh
-
+9- Run java class KafkaTopicBootstrap into path
+./kafka-oauth-java/src/main/java/ir/isc/kafka/KafkaTopicBootstrap.java
 
