@@ -16,7 +16,7 @@ public class QuickOAuthTest {
     private static final String TOPIC = "test-oauth-topic";
 
     private static final String CLIENT_ID = "kafka-producer";
-    private static final String CLIENT_SECRET = "t1WJXUiBrmaMSZtw735tpWp7hFmGZXzW";
+    private static final String CLIENT_SECRET = <CLIENT_SECRET>;
     private static final String TOKEN_URL =
             "http://keycloak:8080/realms/kafka-realm/protocol/openid-connect/token";
 
