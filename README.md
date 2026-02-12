@@ -10,11 +10,11 @@ This is an **evolution** of the previous POC with significant improvements:
 - **No custom Docker build required** - uses official Strimzi image with OAuth pre-installed, eliminates Dockerfile complexity
 - **CVE-2025-27817 awareness** - documents URL allowlist restriction and why Strimzi OAuth bypasses it
 - **Simplified architecture** - single KRaft combined mode (broker+controller), not split architecture
-- **librdkafka client focus** - tested with confluent-kafka-python (works without URL allowlist issues), not Java native clients
+- **librdkafka client focus** - tested with Java native clients
 - **Comprehensive technical documentation** - production checklist, troubleshooting, performance tuning, principal mapping details
 - **Cleaner certificate management** - included example certificates for immediate testing
 - **Automated Keycloak setup** - scripted realm/client/mapper creation with audience configuration
-- **Working Python test suite** - validates OAuth end-to-end message delivery
+- **Working Java test ** - validates OAuth end-to-end message delivery
 - **Explicit issuer URL handling** - documents internal vs external URL duality for token endpoint vs issuer validation
 
 ## Architecture
@@ -34,7 +34,7 @@ Apache Kafka 4.0.0+ introduced URL allowlist (`org.apache.kafka.sasl.oauthbearer
 ## Prerequisites
 
 - Docker Compose
-- Python 3.x with uv (for testing)
+- Java 17 (for testing)
 - OpenSSL (for certificate generation)
 
 ✅ Target Architecture
@@ -92,9 +92,9 @@ Run init-kafka.sh
 run  docker compose up -d kafka-broker
 
 # Test OAuth producer
-source ~/.venv/bin/activate
-uv pip install confluent-kafka
-python tests/quick_test.py
+/kafka-oauth-java/src/main/java/ir/isc/kafka/QuickOAuthTest.java
+/kafka-oauth-java/src/main/java/ir/isc/kafka/OAuthKafkaProducer.java
+/kafka-oauth-java/src/main/java/ir/isc/kafka/ConsumerConfig.java
 ```
 
 ## Network Topology
@@ -351,7 +351,7 @@ Think of Kafka OAuth like this:
 
 **Issue**: Native Java Kafka clients fail with URL allowlist error
 - **Cause**: CVE-2025-27817 fix in Apache Kafka 4.1.0
-- **Fix**: Use librdkafka-based clients (confluent-kafka-python) or Strimzi OAuth on broker side (already configured)
+- **Fix**: Use java clients  or Strimzi OAuth on broker side (already configured)
 
 ## Performance Tuning
 
@@ -466,7 +466,7 @@ ACLs reference this principal for authorization.
 | Strimzi OAuth Library | 0.17.0 | Pre-bundled in Strimzi Kafka 0.48.0 image |
 | Keycloak | 26.1.1 | Latest LTS |
 | librdkafka | 2.12.0+ | OIDC OAuth support |
-| confluent-kafka-python | 2.12.0+ | Matches librdkafka version |
+| java| 17+ | 
 
 ## References
 
