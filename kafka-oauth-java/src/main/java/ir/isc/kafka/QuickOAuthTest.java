@@ -64,7 +64,7 @@ public class QuickOAuthTest {
         props.put("ssl.truststore.location",
                 "/home/arsaln-fallah/projects/Borna Connect/kafka-keycloak-oauth/" +
                         "kafka-security/broker/kafka.server.truststore.jks");
-        props.put("ssl.truststore.password", "changeit");
+        props.put("ssl.truststore.password", "*******");
         props.put("ssl.endpoint.identification.algorithm", "");
 
         KafkaProducer<String, String> producer =
