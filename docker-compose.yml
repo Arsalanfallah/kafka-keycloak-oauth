@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1.1
+    container_name: keycloak
+    hostname: keycloak
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: oracle
+      KC_DB_URL: jdbc:oracle:thin:@//192.168.73.186:1521/orclpdb1
+      KC_DB_USERNAME: U_KEYCLOAK_DEV
+      KC_DB_PASSWORD: 1234
+      KC_HTTP_PORT: 8080
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+    ports:
+      - "8080:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      - ./oauth-libs/keycloak/ojdbc11-21.9.0.0.jar:/opt/keycloak/providers/ojdbc11.jar
+
+    networks:
+      - kafka-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  kafka-broker:
+    image: quay.io/strimzi/kafka:0.48.0-kafka-4.1.0
+    # Using Strimzi Kafka 0.48.0 with Apache Kafka 4.1.0 and built-in OAuth support
+    container_name: kafka-broker
+    hostname: kafka-broker
+    user: root
+    command:
+      - /bin/bash
+      - -c
+      - |
+        echo "Waiting for Keycloak JWKS endpoint..."
+        until curl -sf http://keycloak:8080/realms/kafka-realm/protocol/openid-connect/certs > /dev/null; do
+          echo "Keycloak not ready yet..."
+          sleep 5
+        done
+        echo "Keycloak JWKS is reachable"
+    
+        export LOG_DIR=/tmp/kafka-logs
+        mkdir -p $LOG_DIR
+    
+        export CLUSTER_ID=${CLUSTER_ID:-$(bin/kafka-storage.sh random-uuid)}
+        if [ ! -f /var/lib/kafka/data/meta.properties ]; then
+          bin/kafka-storage.sh format -t $CLUSTER_ID -c /tmp/kraft-config.properties
+        fi
+        # Start Kafka
+        bin/kafka-server-start.sh /tmp/kraft-config.properties
+
+    depends_on:
+      - keycloak
+    ports:
+      - "9093:9093"
+    environment:
+      # Cluster ID for KRaft
+      CLUSTER_ID: ${CLUSTER_ID:-kafka-cluster-01}
+      KAFKA_HEAP_OPTS: "-Xms1G -Xmx2G"
+      # Disable GC logging to avoid permission issues
+      KAFKA_GC_LOG_OPTS: " "
+
+      # Kafka logging
+      KAFKA_LOG4J_LOGGERS: "io.strimzi.kafka.oauth=DEBUG,org.apache.kafka.common.security.oauthbearer=DEBUG"
+      #CLASSPATH: "/opt/kafka/oauth-libs/*"
+    volumes:
+      # Admin credentials
+      - ./kafka-config/client.properties:/tmp/client.properties:ro
+      - ./kafka-config/admin-jaas.conf:/tmp/admin-jaas.conf:ro
+      # ACL bootstrap script
+      - ./scripts/bootstrap-acls.sh:/tmp/bootstrap-acls.sh:ro
+      # Mount KRaft configuration file
+      - ./kafka-config/kraft-config.properties:/tmp/kraft-config.properties:ro
+      # SSL certificates
+      - ./kafka-security/broker/kafka.server.keystore.jks:/etc/kafka/secrets/kafka.server.keystore.jks:ro
+      - ./kafka-security/broker/kafka.server.truststore.jks:/etc/kafka/secrets/kafka.server.truststore.jks:ro
+      # Persistent data
+      - kafka-broker-data:/var/lib/kafka/data
+      #- ./oauth-libs/kafka:/opt/kafka/oauth-libs
+    networks:
+      - kafka-network
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9093 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-cluster-ui
+    ports:
+      - "8082:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka1:9092,kafka2:9092,kafka3:9092
+    depends_on:
+      - kafka-broker
+    networks:
+      - kafka-network
+volumes:
+  kafka-broker-data:
+    driver: local
+  keycloak-data:
+    driver: local
+networks:
+  kafka-network:
+    driver: bridge

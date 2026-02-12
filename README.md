@@ -1,2 +1,477 @@
-# kafka-keycloak-oauth
-Produce and Consume encrypted Event In Kafka 4.1.0 with OAuth Keycloak
+# Apache Kafka 4.1.0 with Keycloak OAuth2 Authentication
+
+Production-ready Apache Kafka 4.1.0 (KRaft mode) with Keycloak 26.1.1 OAuth2/OIDC authentication using Strimzi Kafka image.
+
+## Why This Project vs [kafka-oauth-keycloak-tls-demo](https://github.com/oriolrius/kafka-oauth-keycloak-tls-demo)
+
+This is an **evolution** of the previous POC with significant improvements:
+
+- **Strimzi OAuth 0.17.0** (vs 1.0.0) - stable production version bundled in Strimzi Kafka 0.48.0 image
+- **No custom Docker build required** - uses official Strimzi image with OAuth pre-installed, eliminates Dockerfile complexity
+- **CVE-2025-27817 awareness** - documents URL allowlist restriction and why Strimzi OAuth bypasses it
+- **Simplified architecture** - single KRaft combined mode (broker+controller), not split architecture
+- **librdkafka client focus** - tested with confluent-kafka-python (works without URL allowlist issues), not Java native clients
+- **Comprehensive technical documentation** - production checklist, troubleshooting, performance tuning, principal mapping details
+- **Cleaner certificate management** - included example certificates for immediate testing
+- **Automated Keycloak setup** - scripted realm/client/mapper creation with audience configuration
+- **Working Python test suite** - validates OAuth end-to-end message delivery
+- **Explicit issuer URL handling** - documents internal vs external URL duality for token endpoint vs issuer validation
+
+## Architecture
+
+- **Kafka Distribution**: Strimzi Kafka image 0.48.0 (includes Apache Kafka 4.1.0 + Strimzi OAuth 0.17.0 pre-bundled)
+- **Kafka Version**: Apache Kafka 4.1.0 (KRaft combined broker+controller)
+- **OAuth Library**: Strimzi Kafka OAuth 0.17.0 (bundled in image, bypasses CVE-2025-27817 URL allowlist restriction)
+- **OAuth Provider**: Keycloak 26.1.1
+- **Security**: SASL_SSL (OAuth) for external clients, SASL_SSL for inter-broker, SSL with self-signed CA
+
+## CVE-2025-27817 Context
+
+Apache Kafka 4.0.0+ introduced URL allowlist (`org.apache.kafka.sasl.oauthbearer.allowed.urls`) as JVM system property to fix SSRF/arbitrary file read vulnerability. This breaks standard OAuth usage in native Apache Kafka clients.
+
+**Solution**: Strimzi Kafka OAuth library doesn't implement this restriction, enabling OAuth functionality with Kafka 4.1.0.
+
+## Prerequisites
+
+- Docker Compose
+- Python 3.x with uv (for testing)
+- OpenSSL (for certificate generation)
+
+✅ Target Architecture
+In KRaft, security is per-listener. If you want SASL (OAuth) everywhere, you must explicitly secure:
+
+Broker ↔ Broker
+
+Broker ↔ Controller
+
+Client ↔ Broker (already done)
+
+Below is the correct, production-grade way to do this with Strimzi OAuth + Keycloak.
+
+
+| Communication       | Listener     | Security         |
+| ------------------- | ------------ | ---------------- |
+| Client → Broker     | `SASL_SSL`   | OAuth            |
+| Broker → Broker     | `INTERNAL`   | SASL_SSL + OAuth |
+| Broker → Controller | `CONTROLLER` | SASL_SSL + OAuth |
+
+## Quick Start
+
+```bash
+# Generate SSL certificates
+1-
+cd kafka-security
+./generate-certs.sh
+cd ..
+2-
+# Start services
+docker compose up -d keycloak
+
+# Verify Keycloak
+curl http://localhost:8080/health/ready
+
+
+
+3-
+# Setup Keycloak realm and clients
+./scripts/setup-keycloak.sh
+
+Run setup.keycloak.sh to set up Keycloak (realm, clients, secrets).
+
+Manually configure Kafka broker and client properties:
+
+Broker (server.properties / controller.properties): SASL/OAUTHBEARER listener configs + SSL configs.
+
+Producer/consumer (producer.properties / consumer.properties): security.protocol, sasl.mechanism, token endpoint, SSL truststore.
+
+4-
+ Edit  all secrets into  ./kafka-config /kraft-config.properties  
+5-
+Run init-kafka.sh
+6-
+run  docker compose up -d kafka-broker
+
+# Test OAuth producer
+source ~/.venv/bin/activate
+uv pip install confluent-kafka
+python tests/quick_test.py
+```
+
+## Network Topology
+
+```
+keycloak:8080 (HTTP) ←→ kafka-broker:9093 (SASL_SSL/OAuth)
+                      ↔ kafka-broker:19092 (SASL_SSL/inter-broker)
+                      ↔ kafka-broker:29093 (SASL_SSL/KRaft controller)
+```
+
+## SSL Configuration
+
+### CA Structure
+- **Root CA**: `kafka-security/ca-cert` + `ca-key`
+- **Broker Keystore**: `kafka-security/broker/kafka.server.keystore.jks` (contains server cert + private key)
+- **Broker Truststore**: `kafka-security/broker/kafka.server.truststore.jks` (contains CA cert)
+- **Password**: `changeit` (all keystores/truststores)
+
+### Certificate Details
+```bash
+# Broker certificate
+CN=kafka-broker
+SAN=DNS:kafka-broker,DNS:localhost,IP:127.0.0.1
+
+# Validity: 3650 days
+# Key algorithm: RSA 2048-bit
+# Signature algorithm: SHA256withRSA
+```
+
+## Keycloak OAuth Configuration
+
+### Realm: kafka-realm
+
+#### Clients
+
+**kafka-broker** (confidential)
+- Client ID: `kafka-broker`
+- Client Secret: Auto-generated by `setup-keycloak.sh`
+- Purpose: Broker inter-broker OAuth authentication
+- Mappers:
+  - Audience mapper: adds `kafka-broker` to JWT `aud` claim
+  - Username mapper: includes `preferred_username` in token
+
+**kafka-producer** (confidential)
+- Client ID: `kafka-producer`
+- Client Secret: Auto-generated
+- Purpose: External producer clients
+- Grant: `client_credentials`
+- Mappers: Same as kafka-broker
+
+**kafka-consumer** (confidential)
+- Client ID: `kafka-consumer`
+- Client Secret: Auto-generated
+- Purpose: External consumer clients
+- Grant: `client_credentials`
+- Mappers: Same as kafka-broker
+
+### Token Endpoint
+```
+POST http://localhost:8080/realms/kafka-realm/protocol/openid-connect/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials
+&client_id=kafka-producer
+&client_secret=<secret>
+&scope=profile email
+```
+
+### JWT Token Structure
+```json
+{
+  "aud": ["kafka-broker", "account"],
+  "iss": "http://localhost:8080/realms/kafka-realm",
+  "azp": "kafka-producer",
+  "preferred_username": "service-account-kafka-producer",
+  "scope": "profile email"
+}
+```
+
+## Kafka Configuration
+
+### KRaft Mode (kraft-config.properties)
+
+```properties
+# Node identity
+node.id=1
+process.roles=broker,controller
+controller.quorum.voters=1@kafka-broker:29093
+
+# Listeners
+listeners=SASL_SSL://0.0.0.0:9093,SASL_SSL://0.0.0.0:19092,CONTROLLER://0.0.0.0:29093
+advertised.listeners=SASL_SSL://localhost:9093,SASL_SSL://kafka-broker:19092
+listener.security.protocol.map=SASL_SSL:SASL_SSL,SASL_SSL:SASL_SSL,CONTROLLER:SASL_SSL
+inter.broker.listener.name=SASL_SSL
+controller.listener.names=CONTROLLER
+
+# SASL mechanism
+sasl.enabled.mechanisms=OAUTHBEARER
+
+# Strimzi OAuth handlers (per-listener for SASL_SSL)
+listener.name.sasl_ssl.oauthbearer.sasl.login.callback.handler.class=io.strimzi.kafka.oauth.client.JaasClientOauthLoginCallbackHandler
+listener.name.sasl_ssl.oauthbearer.sasl.server.callback.handler.class=io.strimzi.kafka.oauth.server.JaasServerOauthValidatorCallbackHandler
+
+# OAuth configuration via JAAS
+listener.name.sasl_ssl.oauthbearer.sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required \
+  oauth.client.id="kafka-broker" \
+  oauth.client.secret="<secret>" \
+  oauth.token.endpoint.uri="http://keycloak:8080/realms/kafka-realm/protocol/openid-connect/token" \
+  oauth.valid.issuer.uri="http://localhost:8080/realms/kafka-realm" \
+  oauth.jwks.endpoint.uri="http://keycloak:8080/realms/kafka-realm/protocol/openid-connect/certs" \
+  oauth.username.claim="preferred_username";
+```
+
+### Key Strimzi OAuth Parameters
+
+- `oauth.client.id`: Client identifier for token acquisition
+- `oauth.client.secret`: Client secret for token acquisition
+- `oauth.token.endpoint.uri`: Keycloak token endpoint (broker uses internal hostname `keycloak:8080`)
+- `oauth.valid.issuer.uri`: Expected JWT issuer (must match token `iss` claim, uses external `localhost:8080`)
+- `oauth.jwks.endpoint.uri`: JWKS endpoint for JWT signature validation
+- `oauth.username.claim`: JWT claim for principal extraction
+
+### Authorization
+
+```properties
+authorizer.class.name=org.apache.kafka.metadata.authorizer.StandardAuthorizer
+super.users=User:kafka-broker;User:ANONYMOUS
+allow.everyone.if.no.acl.found=true
+```
+
+**Note**: Currently permissive for testing. Production should use ACLs.
+
+
+
+## Troubleshooting
+
+### Verify OAuth Token
+
+```bash
+TOKEN=$(curl -s -X POST http://keycloak:8080/realms/kafka-realm/protocol/openid-connect/token \
+  -d "grant_type=client_credentials" \
+  -d "client_id=kafka-consumer" \
+  -d "client_secret=8wjdyuQUwBrsMU6paZoCwtZMhUjurnP0" | jq -r .access_token)
+
+echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq .
+```
+
+Expected claims:
+```json
+{
+  "aud": ["kafka-broker", "account"],
+  "iss": "http://localhost:8080/realms/kafka-realm",
+  "azp": "kafka-producer",
+  "preferred_username": "service-account-kafka-producer"
+}
+```
+
+### Check Broker OAuth Logs
+
+```bash
+docker logs kafka-broker 2>&1 | grep -E "Strimzi|JWTSignatureValidator|OAUTHBEARER"
+```
+
+Expected:
+```
+[io.strimzi.kafka.oauth.validator.JWTSignatureValidator] JWKS keys change detected
+```
+
+### Verify Broker Listeners
+
+```bash
+docker exec kafka-broker netstat -tlnp | grep java
+```
+
+Expected:
+```
+tcp6  0.0.0.0:9093   LISTEN  (SASL_SSL)
+tcp6  0.0.0.0:19092  LISTEN  (SASL_SSL)
+tcp6  0.0.0.0:29093  LISTEN  (CONTROLLER)
+```
+
+### Check KRaft Metadata
+
+```bash
+docker exec kafka-broker cat /var/lib/kafka/data/meta.properties
+```
+
+Expected:
+```
+version=1
+cluster.id=kafka-cluster-01
+node.id=1
+```
+### Run Test
+Add this to your host /etc/hosts:
+127.0.0.1  keycloak
+127.0.0.1 kafka-broker
+sudo systemctl restart NetworkManager
+# or just rerun your Java app
+
+
+
+###  docker-compose restart kafka-brok ###
+Final mental model (lock this in)
+Think of Kafka OAuth like this:
+    Keycloak token
+    ↓
+    Kafka extracts ONE claim (sub by default)
+    ↓
+    Kafka builds principal: User:<claim-value>
+    ↓
+    Kafka checks ACLs
+
+### Common Issues
+**Issue**:  '{"CoordinatorNotAvailableException":" The coordinator is not available
+      Sending FindCoordinator request … keyType=GROUP … coordinatorKeys=[test-consumer-group]"}'
+- **Cause**:Your consumer cannot talk to the GROUP COORDINATOR, because:
+-         🔥 Your INTERNAL / inter-broker listener is not fully usable for group coordination 
+-            with OAuth in a single-node KRaft setup
+-            Producing works because:
+-            Produce → partition leader → CLIENT listener ✔️
+-          Producer path (works)
+-            Producer
+              → CLIENT listener (9093)
+              → Partition Leader
+             No group coordination needed.
+- 
+-            Consuming fails because:
+-            Consume → GroupCoordinator → INTERNAL listener ❌
+-         Consumer
+          → CLIENT listener (9093)
+          → FindCoordinator (GROUP)
+          → Coordinator lives on broker
+          → INTERNAL listener (19092)
+          ❌ OAuth / listener mismatch
+-         Kafka always uses the inter-broker listener for group coordination, even in a single-node cluster.
+- **Fix**:✅ Add GROUP + TOPIC ACLs
+  -           Inside the broker container:
+  -          Run /tmp/bootstrap-acls.sh
+**Issue**: `{"status":"invalid_token"}`
+- **Cause**: JWT signature validation failure
+- **Fix**: Verify `oauth.jwks.endpoint.uri` is reachable from broker container
+- **Check**: `docker exec kafka-broker curl http://keycloak:8080/realms/kafka-realm/protocol/openid-connect/certs`
+
+**Issue**: `Token audience mismatch`
+- **Cause**: JWT `aud` claim doesn't contain `kafka-broker`
+- **Fix**: Run `./scripts/setup-keycloak.sh` to add audience mapper
+- **Verify**: Decode token and check `aud` claim includes `kafka-broker`
+
+**Issue**: `Token issuer mismatch`
+- **Cause**: JWT `iss` doesn't match `oauth.valid.issuer.uri`
+- **Fix**: Ensure `oauth.valid.issuer.uri=http://localhost:8080/realms/kafka-realm` (external hostname)
+- **Note**: Broker uses `http://keycloak:8080` for token endpoint but validates against `http://localhost:8080` issuer
+
+**Issue**: Native Java Kafka clients fail with URL allowlist error
+- **Cause**: CVE-2025-27817 fix in Apache Kafka 4.1.0
+- **Fix**: Use librdkafka-based clients (confluent-kafka-python) or Strimzi OAuth on broker side (already configured)
+
+## Performance Tuning
+
+### Token Refresh
+
+JWT tokens from Keycloak have 5-minute expiry. Strimzi OAuth automatically handles refresh:
+- `oauth.refresh.token`: Not used (client_credentials grant)
+- Token cached and refreshed 30s before expiry
+
+### JWKS Caching
+
+```properties
+sasl.oauthbearer.jwks.endpoint.refresh.ms=3600000  # 1 hour
+sasl.oauthbearer.jwks.endpoint.retry.backoff.ms=100
+sasl.oauthbearer.jwks.endpoint.retry.backoff.max.ms=10000
+```
+
+### Connection Settings
+
+```properties
+connections.max.idle.ms=600000
+connection.failed.authentication.delay.ms=1000
+```
+
+## Production Checklist
+
+- [ ] Replace self-signed certificates with CA-signed certificates
+- [ ] Update `ssl.endpoint.identification.algorithm=https` (remove `none`)
+- [ ] Configure proper ACLs (remove `allow.everyone.if.no.acl.found=true`)
+- [ ] Set up ACLs:
+  ```bash
+  kafka-acls --bootstrap-server localhost:9093 \
+    --command-config admin.properties \
+    --add --allow-principal User:kafka-producer \
+    --operation Write --topic '*'
+  ```
+- [ ] Rotate Keycloak client secrets
+- [ ] Enable Keycloak HTTPS
+- [ ] Update `oauth.token.endpoint.uri` and `oauth.jwks.endpoint.uri` to HTTPS URLs
+- [ ] Configure Kafka monitoring (JMX, Prometheus)
+- [ ] Set up log aggregation for OAuth audit trail
+- [ ] Test failover scenarios
+- [ ] Document secret rotation procedures
+- [ ] Enable Keycloak user federation (LDAP/AD) if needed
+
+## Directory Structure
+
+```
+.
+├── docker-compose.yml              # Orchestration
+├── .env                            # Secrets (gitignored)
+├── kafka-config/
+│   ├── kraft-config.properties     # Kafka broker configuration
+│   ├── producer.properties         # Producer OAuth config (for CLI tools)
+│   └── consumer.properties         # Consumer OAuth config (for CLI tools)
+├── kafka-security/
+│   ├── generate-certs.sh           # SSL certificate generator
+│   ├── ca-cert                     # Root CA certificate
+│   ├── ca-key                      # Root CA private key
+│   └── broker/
+│       ├── kafka.server.keystore.jks
+│       └── kafka.server.truststore.jks
+├── scripts/
+│   └── setup-keycloak.sh           # Keycloak realm/client setup
+└── tests/
+    └── quick_test.py               # OAuth validation test
+
+```
+
+## Technical Notes
+
+### Why Strimzi Kafka Image Instead of Apache Kafka Official Image
+
+The Strimzi Kafka image (`quay.io/strimzi/kafka:0.48.0-kafka-4.1.0`) is used instead of the official Apache Kafka image because:
+
+1. **Bundled OAuth Support**: Includes Strimzi OAuth 0.17.0 library pre-installed (classes: `io.strimzi.kafka.oauth.*`)
+2. **CVE-2025-27817 Bypass**: Strimzi OAuth library doesn't implement the URL allowlist restriction that breaks native Kafka OAuth
+3. **Production Ready**: Battle-tested in Kubernetes environments via Strimzi Operator
+4. **Single Image**: No need to manually download and mount OAuth JAR files
+
+**Image breakdown**:
+- Strimzi Kafka **0.48.0** = Docker image version/release
+- Apache Kafka **4.1.0** = Kafka broker version bundled inside
+- Strimzi OAuth **0.17.0** = OAuth library version bundled inside
+
+### Issuer URL Duality
+
+Broker configuration has two URLs:
+- `oauth.token.endpoint.uri=http://keycloak:8080/...` (internal Docker network)
+- `oauth.valid.issuer.uri=http://localhost:8080/...` (external, matches JWT `iss` claim)
+
+This is because:
+- Broker fetches tokens using internal DNS name
+- Keycloak issues tokens with external issuer URL (configured in realm settings)
+- JWT validation requires exact issuer match
+
+### Principal Mapping
+
+Broker extracts principal from JWT `preferred_username` claim:
+```
+service-account-kafka-producer → User:service-account-kafka-producer
+```
+
+ACLs reference this principal for authorization.
+
+## Version Compatibility
+
+| Component | Version | Notes |
+|-----------|---------|-------|
+| Apache Kafka | 4.1.0 | KRaft mode (no ZooKeeper) |
+| Strimzi Kafka Image | 0.48.0 | Docker image: `quay.io/strimzi/kafka:0.48.0-kafka-4.1.0` |
+| Strimzi OAuth Library | 0.17.0 | Pre-bundled in Strimzi Kafka 0.48.0 image |
+| Keycloak | 26.1.1 | Latest LTS |
+| librdkafka | 2.12.0+ | OIDC OAuth support |
+| confluent-kafka-python | 2.12.0+ | Matches librdkafka version |
+
+## References
+
+- [Strimzi Kafka OAuth](https://github.com/strimzi/strimzi-kafka-oauth)
+- [Apache Kafka Security](https://kafka.apache.org/documentation/#security)
+- [Keycloak OIDC](https://www.keycloak.org/docs/latest/securing_apps/#_oidc)
+- [CVE-2025-27817](https://nvd.nist.gov/vuln/detail/CVE-2025-27817)
+- [KRaft Mode](https://kafka.apache.org/documentation/#kraft)
