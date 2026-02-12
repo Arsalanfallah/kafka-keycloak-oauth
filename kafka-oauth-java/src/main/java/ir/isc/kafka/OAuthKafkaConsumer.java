@@ -14,7 +14,7 @@ public class OAuthKafkaConsumer {
     private static final String GROUP_ID = "test-consumer-group";
 
     private static final String CLIENT_ID = "kafka-consumer";
-    private static final String CLIENT_SECRET = "zwPeaen9hnAtAblg3mCbaBH7nFSM52kJ";
+    private static final String CLIENT_SECRET = <CLIENT_SECRET>;
     private static final String TOKEN_URL =
             "http://keycloak:8080/realms/kafka-realm/protocol/openid-connect/token";
 
@@ -59,7 +59,7 @@ public class OAuthKafkaConsumer {
 
         // --- SSL ---
         props.put("ssl.truststore.location",
-                "/home/arsaln-fallah/projects/Borna Connect/kafka-keycloak-oauth/" +
+                "/kafka-keycloak-oauth/" +
                         "kafka-security/broker/kafka.server.truststore.jks");
         props.put("ssl.truststore.password", "changeit");
         props.put("ssl.endpoint.identification.algorithm", "");

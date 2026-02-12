@@ -9,7 +9,7 @@ cat << 'EOF' > /opt/kafka/config/admin-jaas.conf
   KafkaClient {
   org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required
   oauth.client.id="kafka-broker"
-  oauth.client.secret="HlMg4MB460S6hwiirIjqqg0Fo47dhmpw"
+  oauth.client.secret=<SECRET>
   oauth.token.endpoint.uri="http://keycloak:8080/realms/kafka-realm/protocol/openid-connect/token"
   oauth.scope="openid";
 };
