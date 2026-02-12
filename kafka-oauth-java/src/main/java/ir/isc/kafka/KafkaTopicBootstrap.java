@@ -19,7 +19,7 @@ public class KafkaTopicBootstrap {
     private static final String BOOTSTRAP_SERVERS = "kafka-broker:9093";
 
     private static final String CLIENT_ID = "kafka-broker";
-    private static final String CLIENT_SECRET = "GmXezNwKIBxh1622N33hnGu03dM67nK6";
+    private static final String CLIENT_SECRET = <CLIENT_SECRET>;
     private static final String TOKEN_URL =
             "http://keycloak:8080/realms/kafka-realm/protocol/openid-connect/token";
 
@@ -46,7 +46,7 @@ public class KafkaTopicBootstrap {
         props.put("ssl.truststore.location",
                 "/home/arsaln-fallah/projects/Borna Connect/kafka-keycloak-oauth/" +
                         "kafka-security/broker/kafka.server.truststore.jks");
-        props.put("ssl.truststore.password", "changeit");
+        props.put("ssl.truststore.password", "*****");
         props.put("ssl.endpoint.identification.algorithm", "");
 
         try (AdminClient admin = AdminClient.create(props)) {
